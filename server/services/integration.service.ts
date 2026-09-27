@@ -6,6 +6,7 @@ interface ProviderDefinition {
   name: string;
   keyName: string;
   envKeys: string[];
+  requiredEnvKeys?: string[];
   description: string;
   documentationUrl: string;
   testFunction: (keys: Record<string, string>) => Promise<{ success: boolean; message: string }>;
@@ -60,17 +61,36 @@ const PROVIDERS: ProviderDefinition[] = [
   },
   {
     category: 'Earth Observation & Satellite',
-    name: 'Copernicus & Sentinel Hub',
+    name: 'Copernicus Data Space OAuth',
     keyName: 'SENTINEL_HUB_CLIENT_ID',
-    envKeys: ['SENTINEL_HUB_CLIENT_ID', 'COPERNICUS_API_KEY'],
-    description: 'Automated NDVI and radar backscatter change detection for illegal dumpsites and scrap accumulation.',
+    envKeys: ['SENTINEL_HUB_CLIENT_ID', 'SENTINEL_HUB_CLIENT_SECRET'],
+    requiredEnvKeys: ['SENTINEL_HUB_CLIENT_ID', 'SENTINEL_HUB_CLIENT_SECRET'],
+    description: 'Authenticates with Copernicus Data Space for Sentinel imagery and Earth observation workflows.',
     documentationUrl: 'https://dataspace.copernicus.eu/',
     testFunction: async (keys) => {
       const key = keys['SENTINEL_HUB_CLIENT_ID'] || process.env.SENTINEL_HUB_CLIENT_ID;
-      if (!key) {
-        return { success: false, message: 'Sentinel Hub client credentials not configured. Satellite alerts remain candidate-only.' };
+      const secret = keys['SENTINEL_HUB_CLIENT_SECRET'] || process.env.SENTINEL_HUB_CLIENT_SECRET;
+      if (!key || !secret) {
+        return { success: false, message: 'Set both SENTINEL_HUB_CLIENT_ID and SENTINEL_HUB_CLIENT_SECRET to test Copernicus OAuth.' };
       }
-      return { success: true, message: 'Copernicus Data Space connection verified.' };
+
+      try {
+        const response = await fetch('https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id: key,
+            client_secret: secret,
+            grant_type: 'client_credentials',
+          }),
+        });
+        if (response.ok) {
+          return { success: true, message: 'Copernicus Data Space OAuth authentication succeeded.' };
+        }
+        return { success: false, message: `Copernicus OAuth returned HTTP ${response.status}. Check the client credentials.` };
+      } catch (error: any) {
+        return { success: false, message: `Copernicus OAuth connection failed: ${error.message}` };
+      }
     },
   },
   {
@@ -102,15 +122,55 @@ const PROVIDERS: ProviderDefinition[] = [
     category: 'Messaging & Notifications',
     name: 'Twilio SMS & WhatsApp Gateway',
     keyName: 'TWILIO_AUTH_TOKEN',
-    envKeys: ['TWILIO_AUTH_TOKEN', 'TERMII_API_KEY'],
+    envKeys: ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN'],
+    requiredEnvKeys: ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN'],
     description: 'Driver dispatch alerts, weighbridge arrival notifications, and proof of delivery SMS receipts.',
     documentationUrl: 'https://console.twilio.com/',
     testFunction: async (keys) => {
-      const key = keys['TWILIO_AUTH_TOKEN'] || process.env.TWILIO_AUTH_TOKEN;
-      if (!key) {
-        return { success: false, message: 'Twilio credentials not configured. In-app notifications active.' };
+      const accountSid = keys['TWILIO_ACCOUNT_SID'] || process.env.TWILIO_ACCOUNT_SID;
+      const authToken = keys['TWILIO_AUTH_TOKEN'] || process.env.TWILIO_AUTH_TOKEN;
+      if (!accountSid || !authToken) {
+        return { success: false, message: 'Set both TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN to test the messaging connection.' };
       }
-      return { success: true, message: 'SMS/WhatsApp gateway verified.' };
+
+      try {
+        const credentials = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
+        const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(accountSid)}.json`, {
+          headers: { Authorization: `Basic ${credentials}` },
+        });
+        if (response.ok) {
+          return { success: true, message: 'Twilio account authentication succeeded.' };
+        }
+        return { success: false, message: `Twilio returned HTTP ${response.status}. Check the account SID and auth token.` };
+      } catch (error: any) {
+        return { success: false, message: `Twilio connection failed: ${error.message}` };
+      }
+    },
+  },
+  {
+    category: 'Email & Notifications',
+    name: 'SendGrid Email API',
+    keyName: 'SENDGRID_API_KEY',
+    envKeys: ['SENDGRID_API_KEY'],
+    description: 'Transactional email delivery for account notices, dispatch updates, and platform alerts.',
+    documentationUrl: 'https://docs.sendgrid.com/',
+    testFunction: async (keys) => {
+      const key = keys['SENDGRID_API_KEY'] || process.env.SENDGRID_API_KEY;
+      if (!key) {
+        return { success: false, message: 'SENDGRID_API_KEY is not configured.' };
+      }
+
+      try {
+        const response = await fetch('https://api.sendgrid.com/v3/scopes', {
+          headers: { Authorization: `Bearer ${key}` },
+        });
+        if (response.ok) {
+          return { success: true, message: 'SendGrid API key authenticated successfully.' };
+        }
+        return { success: false, message: `SendGrid returned HTTP ${response.status}. Check the API key and its scopes.` };
+      } catch (error: any) {
+        return { success: false, message: `SendGrid connection failed: ${error.message}` };
+      }
     },
   },
   {
@@ -136,7 +196,10 @@ export function getIntegrationsList(): IntegrationStatus[] {
   return PROVIDERS.map((p) => {
     const customKey = customSettings[p.keyName];
     const envKey = p.envKeys.map((k) => process.env[k]).find(Boolean);
-    const hasKey = Boolean(customKey || (envKey && envKey !== 'MY_GEMINI_API_KEY'));
+    const hasRequiredKeys = p.requiredEnvKeys?.every((key) => Boolean(customSettings[key] || process.env[key]));
+    const hasKey = p.requiredEnvKeys
+      ? Boolean(hasRequiredKeys)
+      : Boolean(customKey || (envKey && envKey !== 'MY_GEMINI_API_KEY'));
 
     return {
       category: p.category,

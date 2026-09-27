@@ -241,7 +241,7 @@ RECYCLN is designed so that dropping in real API keys is all that's needed to go
 
 | Category | Keys |
 |---|---|
-| Maps & Routing | `MAPBOX_API_KEY`, `OPENROUTESERVICE_API_KEY` |
+| Maps & Routing | `VITE_MAPBOX_ACCESS_TOKEN` (public, domain-restricted map tiles), `MAPBOX_API_KEY` (server-side geocoding), `OPENROUTESERVICE_API_KEY` |
 | Satellite / EO | `SENTINEL_HUB_CLIENT_ID`, `SENTINEL_HUB_CLIENT_SECRET` |
 | Payments | `PAYSTACK_SECRET_KEY`, `FLUTTERWAVE_SECRET_KEY` |
 | AI / Vision | `LLM_API_KEY`, `VISION_MODEL_API_KEY` |
@@ -250,7 +250,11 @@ RECYCLN is designed so that dropping in real API keys is all that's needed to go
 | Storage | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET` |
 | Core | `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET` |
 
-See `.env.example` for the complete list and links to where to obtain each key. Any integration left unconfigured shows clearly as **"Integration not configured"** in the UI rather than faking a result.
+See `.env.example` for the complete list and links to where to obtain each key. The Admin → Integrations page checks Copernicus OAuth, Twilio account authentication, and SendGrid API-key authentication when their required credentials are present.
+
+The current AI and image-scanning adapter uses `GEMINI_API_KEY`. `LLM_API_KEY` and `VISION_MODEL_API_KEY` are included as provider-specific configuration slots; they are not consumed until an LLM/vision vendor adapter is selected. Keep all service credentials server-side and out of `VITE_` variables.
+
+The geospatial map uses CARTO dark tiles when `VITE_MAPBOX_ACCESS_TOKEN` is empty. To enable Mapbox tiles, set this variable in your local `.env` to a **public token restricted to your app's allowed URLs**, then restart the dev server. Because Vite exposes `VITE_` variables in browser code, never use a secret/server-side Mapbox token here.
 
 ## 📁 Project Structure
 

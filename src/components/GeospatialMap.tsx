@@ -20,6 +20,14 @@ import {
 } from 'lucide-react';
 import 'leaflet/dist/leaflet.css';
 
+const mapboxAccessToken = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN?.trim();
+const mapTileUrl = mapboxAccessToken
+  ? `https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/256/{z}/{x}/{y}?access_token=${encodeURIComponent(mapboxAccessToken)}`
+  : 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+const mapAttribution = mapboxAccessToken
+  ? '&copy; <a href="https://www.mapbox.com/about/maps/">Mapbox</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+  : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
+
 type EntityType = 'RESOURCE' | 'FACILITY' | 'VEHICLE' | 'INFRASTRUCTURE' | 'SATELLITE';
 
 type EntityData = {
@@ -228,9 +236,10 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
             className="h-full min-h-[520px] w-full bg-[#10191a] xl:min-h-[680px]"
           >
             <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-              url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+              attribution={mapAttribution}
+              url={mapTileUrl}
               subdomains="abcd"
+              tileSize={256}
               maxZoom={20}
             />
             <ZoomControl position="bottomright" />
@@ -439,7 +448,7 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
           <div className="border-t border-neutral-800 px-4 py-3 text-[10px] text-neutral-500">
             <div className="flex items-center justify-between">
               <span className="flex items-center gap-1.5"><Building2 className="h-3 w-3" /> Lagos operations region</span>
-              <span className="font-mono">WGS 84</span>
+              <span className="font-mono">{mapboxAccessToken ? 'MAPBOX · WGS 84' : 'CARTO · WGS 84'}</span>
             </div>
           </div>
         </aside>
