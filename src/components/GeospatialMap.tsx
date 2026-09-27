@@ -1,16 +1,44 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { divIcon } from 'leaflet';
+import { MapContainer, Marker, TileLayer, ZoomControl, useMap } from 'react-leaflet';
 import type { Resource, Facility, Vehicle, InfrastructureReport, SatelliteDetection } from '../types/index.ts';
 import {
-  MapPin,
-  Truck,
-  Factory,
+  Activity,
   AlertTriangle,
-  Satellite,
-  Compass,
-  Layers,
   ArrowRight,
-  Filter,
+  Building2,
+  Check,
+  CircleDot,
+  Crosshair,
+  Factory,
+  Layers3,
+  MapPin,
+  Package,
+  Radio,
+  Satellite,
+  Truck,
 } from 'lucide-react';
+import 'leaflet/dist/leaflet.css';
+
+type EntityType = 'RESOURCE' | 'FACILITY' | 'VEHICLE' | 'INFRASTRUCTURE' | 'SATELLITE';
+
+type EntityData = {
+  RESOURCE: Resource;
+  FACILITY: Facility;
+  VEHICLE: Vehicle;
+  INFRASTRUCTURE: InfrastructureReport;
+  SATELLITE: SatelliteDetection;
+};
+
+type MapEntity<T extends EntityType = EntityType> = T extends EntityType ? {
+  id: string;
+  type: T;
+  title: string;
+  subtitle: string;
+  lat: number;
+  lng: number;
+  raw: EntityData[T];
+} : never;
 
 interface GeospatialMapProps {
   resources: Resource[];
@@ -22,6 +50,53 @@ interface GeospatialMapProps {
   onSelectFacility: (facility: Facility) => void;
 }
 
+const layerConfig: Array<{
+  type: EntityType;
+  label: string;
+  color: string;
+  icon: React.ComponentType<{ className?: string }>;
+}> = [
+  { type: 'RESOURCE', label: 'Resources', color: '#34d399', icon: Package },
+  { type: 'FACILITY', label: 'Facilities', color: '#60a5fa', icon: Factory },
+  { type: 'VEHICLE', label: 'Fleet vehicles', color: '#c084fc', icon: Truck },
+  { type: 'INFRASTRUCTURE', label: 'Civic alerts', color: '#fbbf24', icon: AlertTriangle },
+  { type: 'SATELLITE', label: 'Satellite candidates', color: '#22d3ee', icon: Satellite },
+];
+
+function createMarkerIcon(type: EntityType, selected: boolean) {
+  const color = layerConfig.find((layer) => layer.type === type)?.color ?? '#34d399';
+  return divIcon({
+    className: 'recycln-map-marker',
+    html: `<span class="recycln-marker-pin${selected ? ' is-selected' : ''}" style="--marker-color:${color}"><span></span></span>`,
+    iconSize: [34, 42],
+    iconAnchor: [17, 34],
+  });
+}
+
+function FitMapToEntities({ points }: { points: MapEntity[] }) {
+  const map = useMap();
+  const coordinatesKey = points.map((point) => `${point.id}:${point.lat}:${point.lng}`).join('|');
+
+  useEffect(() => {
+    if (points.length === 0) {
+      map.setView([6.54, 3.42], 11);
+      return;
+    }
+
+    if (points.length === 1) {
+      map.setView([points[0].lat, points[0].lng], 13);
+      return;
+    }
+
+    map.fitBounds(
+      points.map((point) => [point.lat, point.lng] as [number, number]),
+      { padding: [52, 52], maxZoom: 13 },
+    );
+  }, [coordinatesKey, map]);
+
+  return null;
+}
+
 export const GeospatialMap: React.FC<GeospatialMapProps> = ({
   resources,
   facilities,
@@ -31,374 +106,344 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
   onSelectResource,
   onSelectFacility,
 }) => {
-  const [selectedEntity, setSelectedEntity] = useState<any>(null);
-  const [filterType, setFilterType] = useState<string>('all');
-  const [radiusFilter, setRadiusFilter] = useState<number>(60);
+  const [selectedEntity, setSelectedEntity] = useState<MapEntity | null>(null);
+  const [visibleLayers, setVisibleLayers] = useState<Set<EntityType>>(
+    () => new Set(layerConfig.map((layer) => layer.type)),
+  );
 
-  // Center coordinate around Lagos Industrial Corridor (lat: 6.5244, lng: 3.3792)
-  const mapCenter = { lat: 6.54, lng: 3.42 };
+  const allPoints = useMemo<MapEntity[]>(() => [
+    ...resources.map((resource) => ({
+      id: resource.id,
+      type: 'RESOURCE' as const,
+      title: resource.name,
+      subtitle: `${resource.quantity} ${resource.unit} · ${resource.materialType}`,
+      lat: resource.lat,
+      lng: resource.lng,
+      raw: resource,
+    })),
+    ...facilities.map((facility) => ({
+      id: facility.id,
+      type: 'FACILITY' as const,
+      title: facility.name,
+      subtitle: `${facility.availableCapacityTonnesPerMonth} t/mo open capacity`,
+      lat: facility.lat,
+      lng: facility.lng,
+      raw: facility,
+    })),
+    ...vehicles.map((vehicle) => ({
+      id: vehicle.id,
+      type: 'VEHICLE' as const,
+      title: `${vehicle.model} (${vehicle.registrationPlate})`,
+      subtitle: `Status: ${vehicle.currentStatus} · ${vehicle.locationName}`,
+      lat: vehicle.currentLat,
+      lng: vehicle.currentLng,
+      raw: vehicle,
+    })),
+    ...reports.map((report) => ({
+      id: report.id,
+      type: 'INFRASTRUCTURE' as const,
+      title: report.title,
+      subtitle: `${report.severity} · ${report.category.replace(/_/g, ' ')}`,
+      lat: report.lat,
+      lng: report.lng,
+      raw: report,
+    })),
+    ...satelliteDetections.map((detection) => ({
+      id: detection.id,
+      type: 'SATELLITE' as const,
+      title: detection.targetArea,
+      subtitle: `Candidate ${detection.detectionType.replace(/_/g, ' ')} · ${detection.changeAreaSqm.toLocaleString()} m²`,
+      lat: detection.lat,
+      lng: detection.lng,
+      raw: detection,
+    })),
+  ], [resources, facilities, vehicles, reports, satelliteDetections]);
 
-  // Convert lat/lng to relative SVG percentage coordinates for the interactive viewport
-  const projectCoords = (lat: number, lng: number) => {
-    // Lagos bounding box approx: lat 6.38 - 6.66, lng 3.15 - 3.68
-    const minLat = 6.38;
-    const maxLat = 6.66;
-    const minLng = 3.15;
-    const maxLng = 3.68;
+  const visiblePoints = useMemo(
+    () => allPoints.filter((point) => visibleLayers.has(point.type)),
+    [allPoints, visibleLayers],
+  );
+  const criticalReports = reports.filter((report) => report.severity === 'CRITICAL' || report.severity === 'HIGH').length;
 
-    const x = ((lng - minLng) / (maxLng - minLng)) * 100;
-    const y = (1 - (lat - minLat) / (maxLat - minLat)) * 100;
-    return {
-      x: Math.max(5, Math.min(95, x)),
-      y: Math.max(5, Math.min(95, y)),
-    };
+  const toggleLayer = (type: EntityType) => {
+    setVisibleLayers((current) => {
+      const next = new Set(current);
+      if (next.has(type)) next.delete(type);
+      else next.add(type);
+      return next;
+    });
   };
 
-  const allPoints: Array<{
-    id: string;
-    type: 'RESOURCE' | 'FACILITY' | 'VEHICLE' | 'INFRASTRUCTURE' | 'SATELLITE';
-    title: string;
-    subtitle: string;
-    lat: number;
-    lng: number;
-    raw: any;
-  }> = [];
-
-  if (filterType === 'all' || filterType === 'resources') {
-    resources.forEach((r) => {
-      allPoints.push({
-        id: r.id,
-        type: 'RESOURCE',
-        title: r.name,
-        subtitle: `${r.quantity} ${r.unit} · ${r.materialType}`,
-        lat: r.lat,
-        lng: r.lng,
-        raw: r,
-      });
-    });
-  }
-
-  if (filterType === 'all' || filterType === 'facilities') {
-    facilities.forEach((f) => {
-      allPoints.push({
-        id: f.id,
-        type: 'FACILITY',
-        title: f.name,
-        subtitle: `${f.availableCapacityTonnesPerMonth} t/mo open capacity`,
-        lat: f.lat,
-        lng: f.lng,
-        raw: f,
-      });
-    });
-  }
-
-  if (filterType === 'all' || filterType === 'vehicles') {
-    vehicles.forEach((v) => {
-      allPoints.push({
-        id: v.id,
-        type: 'VEHICLE',
-        title: `${v.model} (${v.registrationPlate})`,
-        subtitle: `Status: ${v.currentStatus} · ${v.locationName}`,
-        lat: v.currentLat,
-        lng: v.currentLng,
-        raw: v,
-      });
-    });
-  }
-
-  if (filterType === 'all' || filterType === 'infrastructure') {
-    reports.forEach((rep) => {
-      allPoints.push({
-        id: rep.id,
-        type: 'INFRASTRUCTURE',
-        title: rep.title,
-        subtitle: `${rep.severity} · ${rep.category.replace('_', ' ')}`,
-        lat: rep.lat,
-        lng: rep.lng,
-        raw: rep,
-      });
-    });
-  }
-
-  if (filterType === 'all' || filterType === 'satellite') {
-    satelliteDetections.forEach((sat) => {
-      allPoints.push({
-        id: sat.id,
-        type: 'SATELLITE',
-        title: sat.targetArea,
-        subtitle: `Candidate ${sat.detectionType.replace('_', ' ')} (${sat.changeAreaSqm} m²)`,
-        lat: sat.lat,
-        lng: sat.lng,
-        raw: sat,
-      });
-    });
-  }
+  const selectEntity = (entity: MapEntity) => setSelectedEntity(entity);
 
   return (
-    <div className="space-y-4">
-      {/* Top Controls Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-neutral-900 border border-neutral-800 p-4 rounded-xl">
-        <div className="flex items-center gap-3">
-          <Compass className="w-5 h-5 text-emerald-400" />
-          <div>
-            <h2 className="text-base font-semibold text-white">Geospatial Resource Network</h2>
-            <div className="text-xs text-neutral-400">
-              Real-time PostGIS coordinate grid & industrial node topology
-            </div>
+    <section className="space-y-5" aria-label="Lagos geospatial operations map">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+        <div>
+          <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-400">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-50" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+            </span>
+            Live operations · Lagos, Nigeria
           </div>
+          <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">Network intelligence</h1>
+          <p className="mt-1 text-sm text-neutral-400">Explore resources, processing capacity, fleet activity and field alerts.</p>
         </div>
-
-        {/* Filter Segmented Control (Zero-Pill compliant functional buttons) */}
-        <div className="flex flex-wrap items-center gap-1.5 bg-neutral-950 p-1 rounded-lg border border-neutral-800 text-xs">
-          <button
-            onClick={() => setFilterType('all')}
-            className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
-              filterType === 'all' ? 'bg-neutral-800 text-emerald-400 shadow-sm' : 'text-neutral-400 hover:text-white'
-            }`}
-          >
-            All Nodes ({allPoints.length})
-          </button>
-          <button
-            onClick={() => setFilterType('resources')}
-            className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
-              filterType === 'resources' ? 'bg-neutral-800 text-emerald-400 shadow-sm' : 'text-neutral-400 hover:text-white'
-            }`}
-          >
-            Resources ({resources.length})
-          </button>
-          <button
-            onClick={() => setFilterType('facilities')}
-            className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
-              filterType === 'facilities' ? 'bg-neutral-800 text-emerald-400 shadow-sm' : 'text-neutral-400 hover:text-white'
-            }`}
-          >
-            Facilities ({facilities.length})
-          </button>
-          <button
-            onClick={() => setFilterType('vehicles')}
-            className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
-              filterType === 'vehicles' ? 'bg-neutral-800 text-emerald-400 shadow-sm' : 'text-neutral-400 hover:text-white'
-            }`}
-          >
-            Fleet ({vehicles.length})
-          </button>
-          <button
-            onClick={() => setFilterType('infrastructure')}
-            className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
-              filterType === 'infrastructure' ? 'bg-neutral-800 text-amber-400 shadow-sm' : 'text-neutral-400 hover:text-white'
-            }`}
-          >
-            Civic Reports ({reports.length})
-          </button>
-          <button
-            onClick={() => setFilterType('satellite')}
-            className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
-              filterType === 'satellite' ? 'bg-neutral-800 text-cyan-400 shadow-sm' : 'text-neutral-400 hover:text-white'
-            }`}
-          >
-            Satellite Intel ({satelliteDetections.length})
-          </button>
+        <div className="flex items-center gap-2 self-start rounded-lg border border-neutral-800 bg-neutral-900/80 px-3 py-2 text-xs text-neutral-300 xl:self-auto">
+          <Radio className="h-3.5 w-3.5 text-emerald-400" />
+          <span>Network online</span>
+          <span className="mx-1 h-3 w-px bg-neutral-700" />
+          <span className="font-mono tabular-nums text-neutral-400">{visiblePoints.length} nodes in view</span>
         </div>
       </div>
 
-      {/* Main Map Container */}
-      <div className="relative w-full h-[520px] bg-neutral-950 border border-neutral-800 rounded-xl overflow-hidden shadow-2xl">
-        {/* Subtle SVG Grid overlay simulating PostGIS geographic raster */}
-        <svg className="absolute inset-0 w-full h-full opacity-30 pointer-events-none" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-              <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#262626" strokeWidth="0.75" />
-            </pattern>
-          </defs>
-          <rect width="100%" height="100%" fill="url(#grid)" />
-
-          {/* Major simulated transit corridors and coastline */}
-          <path
-            d="M 10 90 Q 30 70 55 60 T 95 40"
-            fill="none"
-            stroke="#10b981"
-            strokeWidth="1.5"
-            strokeDasharray="4 4"
-            className="opacity-40"
-          />
-          <path
-            d="M 5 45 Q 40 40 60 50 T 90 75"
-            fill="none"
-            stroke="#3b82f6"
-            strokeWidth="1.5"
-            strokeDasharray="2 3"
-            className="opacity-30"
-          />
-        </svg>
-
-        {/* Spatial Legend Overlay */}
-        <div className="absolute top-4 left-4 bg-neutral-900/90 backdrop-blur-md border border-neutral-800 p-3 rounded-lg text-xs space-y-2 z-10">
-          <div className="font-semibold text-neutral-200 flex items-center gap-1.5">
-            <Layers className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Map Layers</span>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+        {[
+          { label: 'Material sources', value: resources.length, icon: Package, color: 'text-emerald-400' },
+          { label: 'Facilities', value: facilities.length, icon: Factory, color: 'text-blue-400' },
+          { label: 'Active fleet', value: vehicles.length, icon: Truck, color: 'text-purple-400' },
+          { label: 'Priority alerts', value: criticalReports, icon: AlertTriangle, color: 'text-amber-400' },
+          { label: 'Satellite candidates', value: satelliteDetections.length, icon: Satellite, color: 'text-cyan-400' },
+        ].map(({ label, value, icon: Icon, color }) => (
+          <div key={label} className="flex items-center gap-3 rounded-xl border border-neutral-800 bg-neutral-900/70 px-3.5 py-3">
+            <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-neutral-800/80 ${color}`}>
+              <Icon className="h-4 w-4" />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-lg font-semibold leading-tight text-white tabular-nums">{value}</span>
+              <span className="block truncate text-[10px] uppercase tracking-wide text-neutral-500">{label}</span>
+            </span>
           </div>
-          <div className="space-y-1 text-neutral-400">
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
-              <span>Physical Resources</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-blue-400" />
-              <span>Processing Facilities</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-purple-400" />
-              <span>Haulage Fleet Vehicles</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
-              <span>Infrastructure Alerts</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-cyan-400" />
-              <span>Sentinel Candidate Hotspot</span>
-            </div>
-          </div>
-        </div>
+        ))}
+      </div>
 
-        {/* Map Coordinates & Projection Telemetry in bottom corner */}
-        <div className="absolute bottom-4 left-4 bg-neutral-900/80 backdrop-blur-md border border-neutral-800 px-3 py-1.5 rounded-md text-[11px] font-mono text-neutral-400 tabular-nums z-10">
-          CRS: EPSG:4326 · Center: 6.5400° N, 3.4200° E · Active Nodes: {allPoints.length}
-        </div>
-
-        {/* Interactive Spatial Node Markers */}
-        <div className="absolute inset-0 p-8">
-          {allPoints.map((point) => {
-            const coords = projectCoords(point.lat, point.lng);
-            const isSelected = selectedEntity?.id === point.id;
-
-            let markerColor = 'bg-emerald-500 border-emerald-300';
-            let IconComponent = MapPin;
-
-            if (point.type === 'FACILITY') {
-              markerColor = 'bg-blue-500 border-blue-300';
-              IconComponent = Factory;
-            } else if (point.type === 'VEHICLE') {
-              markerColor = 'bg-purple-500 border-purple-300';
-              IconComponent = Truck;
-            } else if (point.type === 'INFRASTRUCTURE') {
-              markerColor = 'bg-amber-500 border-amber-300';
-              IconComponent = AlertTriangle;
-            } else if (point.type === 'SATELLITE') {
-              markerColor = 'bg-cyan-500 border-cyan-300 animate-pulse';
-              IconComponent = Satellite;
-            }
-
-            return (
-              <div
+      <div className="grid min-h-[680px] grid-cols-1 overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-900 shadow-2xl shadow-black/20 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="relative min-h-[520px] border-b border-neutral-800 bg-[#10191a] xl:min-h-[680px] xl:border-b-0 xl:border-r">
+          <MapContainer
+            center={[6.54, 3.42]}
+            zoom={11}
+            zoomControl={false}
+            scrollWheelZoom
+            className="h-full min-h-[520px] w-full bg-[#10191a] xl:min-h-[680px]"
+          >
+            <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+              url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+              subdomains="abcd"
+              maxZoom={20}
+            />
+            <ZoomControl position="bottomright" />
+            <FitMapToEntities points={visiblePoints} />
+            {visiblePoints.map((point) => (
+              <Marker
                 key={point.id}
-                style={{ left: `${coords.x}%`, top: `${coords.y}%` }}
-                className="absolute -translate-x-1/2 -translate-y-1/2 cursor-pointer group"
-                onClick={() => setSelectedEntity(point)}
-              >
-                <div
-                  className={`w-7 h-7 rounded-full flex items-center justify-center text-white border transition-transform duration-200 ${
-                    isSelected ? 'scale-125 ring-4 ring-emerald-500/40 ' + markerColor : markerColor + ' hover:scale-115'
-                  }`}
-                >
-                  <IconComponent className="w-3.5 h-3.5" />
-                </div>
+                position={[point.lat, point.lng]}
+                icon={createMarkerIcon(point.type, selectedEntity?.id === point.id)}
+                eventHandlers={{ click: () => selectEntity(point) }}
+                title={point.title}
+              />
+            ))}
+          </MapContainer>
 
-                {/* Hover Tooltip */}
-                <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-1.5 hidden group-hover:block bg-neutral-900 text-white text-[11px] px-2.5 py-1 rounded shadow-lg whitespace-nowrap border border-neutral-800 z-20">
-                  <div className="font-semibold">{point.title}</div>
-                  <div className="text-neutral-400">{point.subtitle}</div>
-                </div>
-              </div>
-            );
-          })}
+          <div className="pointer-events-none absolute left-4 top-4 z-[500] flex items-center gap-2 rounded-lg border border-white/10 bg-neutral-950/85 px-3 py-2 shadow-lg backdrop-blur-md">
+            <Crosshair className="h-3.5 w-3.5 text-emerald-400" />
+            <span className="text-xs font-medium text-white">Lagos industrial corridor</span>
+            <span className="hidden border-l border-neutral-700 pl-2 font-mono text-[10px] text-neutral-400 sm:inline">6.5244° N · 3.3792° E</span>
+          </div>
+
+          <div className="pointer-events-none absolute bottom-4 left-4 z-[500] flex items-center gap-2 rounded-md border border-white/10 bg-neutral-950/85 px-2.5 py-1.5 text-[10px] text-neutral-300 shadow-lg backdrop-blur-md">
+            <Layers3 className="h-3 w-3 text-emerald-400" />
+            <span>EPSG:4326</span>
+            <span className="text-neutral-600">/</span>
+            <span>{visiblePoints.length} mapped records</span>
+          </div>
         </div>
 
-        {/* Selected Entity Inspector Panel (Floating Sheet) */}
-        {selectedEntity && (
-          <div className="absolute top-4 right-4 w-80 bg-neutral-900 border border-neutral-800 rounded-xl p-4 shadow-2xl z-30 animate-in fade-in slide-in-from-right-2 duration-150">
-            <div className="flex items-start justify-between">
-              <div>
-                <span className="text-[10px] uppercase font-mono tracking-wider text-emerald-400">
-                  {selectedEntity.type} INSPECTION
-                </span>
-                <h3 className="text-sm font-semibold text-white mt-0.5">{selectedEntity.title}</h3>
-                <div className="text-xs text-neutral-400 mt-0.5">{selectedEntity.subtitle}</div>
+        <aside className="flex min-h-[520px] flex-col bg-neutral-900 xl:min-h-[680px]" aria-label="Map layers and selected node">
+          <div className="border-b border-neutral-800 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                <Layers3 className="h-4 w-4 text-emerald-400" />
+                Map layers
               </div>
               <button
-                onClick={() => setSelectedEntity(null)}
-                className="text-neutral-500 hover:text-white text-xs p-1"
+                type="button"
+                onClick={() => setVisibleLayers(new Set(layerConfig.map((layer) => layer.type)))}
+                className="text-[10px] font-medium text-neutral-500 transition hover:text-emerald-400"
               >
-                ✕
+                Show all
               </button>
             </div>
+            <div className="space-y-1">
+              {layerConfig.map(({ type, label, color, icon: Icon }) => {
+                const isVisible = visibleLayers.has(type);
+                const count = allPoints.filter((point) => point.type === type).length;
+                return (
+                  <button
+                    key={type}
+                    type="button"
+                    aria-pressed={isVisible}
+                    onClick={() => toggleLayer(type)}
+                    className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition ${isVisible ? 'bg-neutral-800/70' : 'opacity-50 hover:bg-neutral-800/40'}`}
+                  >
+                    <span className="grid h-7 w-7 place-items-center rounded-md bg-neutral-800" style={{ color }}>
+                      <Icon className="h-3.5 w-3.5" />
+                    </span>
+                    <span className="flex-1 text-xs text-neutral-200">{label}</span>
+                    <span className="font-mono text-[10px] tabular-nums text-neutral-500">{count}</span>
+                    <span className={`grid h-4 w-4 place-items-center rounded border ${isVisible ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-400' : 'border-neutral-700 text-transparent'}`}>
+                      <Check className="h-2.5 w-2.5" />
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
-            <div className="mt-3 pt-3 border-t border-neutral-800 space-y-2 text-xs">
-              <div className="flex justify-between text-neutral-400">
-                <span>GPS Coordinates</span>
-                <span className="font-mono text-neutral-200 tabular-nums">
-                  {selectedEntity.lat.toFixed(4)}°, {selectedEntity.lng.toFixed(4)}°
-                </span>
+          {selectedEntity ? (
+            <div className="flex-1 p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                  <Activity className="h-3.5 w-3.5 text-emerald-400" />
+                  Selected node
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedEntity(null)}
+                  className="rounded-md px-2 py-1 text-[10px] text-neutral-500 transition hover:bg-neutral-800 hover:text-white"
+                >
+                  Clear
+                </button>
               </div>
+              <div className="rounded-xl border border-neutral-800 bg-neutral-950/70 p-3.5">
+                <div className="mb-3 flex items-start gap-2.5">
+                  <span className="mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: layerConfig.find((layer) => layer.type === selectedEntity.type)?.color }} />
+                  <div className="min-w-0">
+                    <div className="text-[9px] font-semibold uppercase tracking-[0.15em] text-neutral-500">{selectedEntity.type.replace('_', ' ')}</div>
+                    <h2 className="mt-1 text-sm font-semibold leading-snug text-white">{selectedEntity.title}</h2>
+                    <p className="mt-1 text-[11px] leading-relaxed text-neutral-400">{selectedEntity.subtitle}</p>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between border-t border-neutral-800 py-2 text-[10px] text-neutral-500">
+                  <span>Coordinates</span>
+                  <span className="font-mono tabular-nums text-neutral-300">{selectedEntity.lat.toFixed(4)}, {selectedEntity.lng.toFixed(4)}</span>
+                </div>
 
-              {selectedEntity.type === 'RESOURCE' && (
-                <>
-                  <div className="flex justify-between text-neutral-400">
-                    <span>Estimated Value</span>
-                    <span className="font-mono font-medium text-emerald-400 tabular-nums">
-                      ${selectedEntity.raw.estimatedValue.toLocaleString()} {selectedEntity.raw.currency}
+                {selectedEntity.type === 'RESOURCE' && (
+                  <>
+                    <div className="flex items-center justify-between border-t border-neutral-800 py-2 text-[10px]">
+                      <span className="text-neutral-500">Estimated value</span>
+                      <span className="font-mono tabular-nums text-emerald-400">{selectedEntity.raw.currency} {selectedEntity.raw.estimatedValue.toLocaleString()}</span>
+                    </div>
+                    <div className="flex items-center justify-between border-t border-neutral-800 py-2 text-[10px]">
+                      <span className="text-neutral-500">Condition</span>
+                      <span className="text-neutral-300">{selectedEntity.raw.condition}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onSelectResource(selectedEntity.raw)}
+                      className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-400 px-3 py-2 text-xs font-semibold text-neutral-950 transition hover:bg-emerald-300"
+                    >
+                      Open resource passport <ArrowRight className="h-3.5 w-3.5" />
+                    </button>
+                  </>
+                )}
+
+                {selectedEntity.type === 'FACILITY' && (
+                  <>
+                    <div className="flex items-center justify-between border-t border-neutral-800 py-2 text-[10px]">
+                      <span className="text-neutral-500">Facility type</span>
+                      <span className="text-neutral-300">{selectedEntity.raw.facilityType.replace(/_/g, ' ')}</span>
+                    </div>
+                    <div className="flex items-center justify-between border-t border-neutral-800 py-2 text-[10px]">
+                      <span className="text-neutral-500">Open capacity</span>
+                      <span className="font-mono tabular-nums text-blue-400">{selectedEntity.raw.availableCapacityTonnesPerMonth.toLocaleString()} t/mo</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onSelectFacility(selectedEntity.raw)}
+                      className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-blue-400 px-3 py-2 text-xs font-semibold text-neutral-950 transition hover:bg-blue-300"
+                    >
+                      View facility <ArrowRight className="h-3.5 w-3.5" />
+                    </button>
+                  </>
+                )}
+
+                {selectedEntity.type === 'VEHICLE' && (
+                  <div className="flex items-center justify-between border-t border-neutral-800 py-2 text-[10px]">
+                    <span className="text-neutral-500">Current status</span>
+                    <span className="text-purple-300">{selectedEntity.raw.currentStatus.replace(/_/g, ' ')}</span>
+                  </div>
+                )}
+
+                {selectedEntity.type === 'INFRASTRUCTURE' && (
+                  <div className="flex items-center justify-between border-t border-neutral-800 py-2 text-[10px]">
+                    <span className="text-neutral-500">Verification</span>
+                    <span className={selectedEntity.raw.humanVerified ? 'text-emerald-400' : 'text-amber-400'}>
+                      {selectedEntity.raw.humanVerified ? 'Human verified' : 'Ground check pending'}
                     </span>
                   </div>
-                  <div className="flex justify-between text-neutral-400">
-                    <span>Condition</span>
-                    <span className="text-neutral-200">{selectedEntity.raw.condition}</span>
-                  </div>
-                  <div className="flex justify-between text-neutral-400">
-                    <span>Passport Batch</span>
-                    <span className="font-mono text-neutral-300">{selectedEntity.raw.passportId}</span>
-                  </div>
-                  <button
-                    onClick={() => onSelectResource(selectedEntity.raw)}
-                    className="w-full mt-2 py-1.5 px-3 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-medium rounded-md transition-colors text-xs flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <span>View Resource Passport</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
-                </>
-              )}
+                )}
 
-              {selectedEntity.type === 'FACILITY' && (
-                <>
-                  <div className="flex justify-between text-neutral-400">
-                    <span>Facility Type</span>
-                    <span className="text-neutral-200">{selectedEntity.raw.facilityType.replace('_', ' ')}</span>
+                {selectedEntity.type === 'SATELLITE' && (
+                  <div className="mt-2 rounded-lg border border-amber-900/60 bg-amber-950/25 p-2.5 text-[10px] leading-relaxed text-amber-200">
+                    Candidate detection only. Ground verification is required before treating this as a confirmed site.
                   </div>
-                  <div className="flex justify-between text-neutral-400">
-                    <span>Monthly Open Capacity</span>
-                    <span className="font-mono text-blue-400 tabular-nums">
-                      {selectedEntity.raw.availableCapacityTonnesPerMonth} tonnes
-                    </span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-1 flex-col p-4">
+              <div className="mb-3 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                <Activity className="h-3.5 w-3.5 text-emerald-400" />
+                Network activity
+              </div>
+              <div className="space-y-1 overflow-y-auto">
+                {visiblePoints.slice(0, 8).map((point) => {
+                  const layer = layerConfig.find((item) => item.type === point.type)!;
+                  const Icon = layer.icon;
+                  return (
+                    <button
+                      key={point.id}
+                      type="button"
+                      onClick={() => selectEntity(point)}
+                      className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition hover:bg-neutral-800"
+                    >
+                      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-neutral-800" style={{ color: layer.color }}>
+                        <Icon className="h-3.5 w-3.5" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-xs text-neutral-200">{point.title}</span>
+                        <span className="mt-0.5 block truncate text-[10px] text-neutral-500">{point.subtitle}</span>
+                      </span>
+                      <MapPin className="h-3 w-3 shrink-0 text-neutral-600" />
+                    </button>
+                  );
+                })}
+                {visiblePoints.length === 0 && (
+                  <div className="rounded-lg border border-dashed border-neutral-800 p-4 text-center text-xs text-neutral-500">
+                    <CircleDot className="mx-auto mb-2 h-4 w-4" />
+                    No nodes in visible layers.
                   </div>
-                  <button
-                    onClick={() => onSelectFacility(selectedEntity.raw)}
-                    className="w-full mt-2 py-1.5 px-3 bg-blue-500 hover:bg-blue-400 text-white font-medium rounded-md transition-colors text-xs flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <span>Reserve Capacity</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
-                </>
-              )}
-
-              {selectedEntity.type === 'SATELLITE' && (
-                <div className="p-2 bg-neutral-950 border border-neutral-800 rounded text-[11px] text-amber-300">
-                  <div className="font-semibold mb-0.5">Ground Verification Required</div>
-                  Candidate detection from {selectedEntity.raw.sourceSatellite}. Does not constitute a verified physical site until inspector ground-truth check.
+                )}
+              </div>
+              {visiblePoints.length > 8 && (
+                <div className="mt-auto border-t border-neutral-800 pt-3 text-center text-[10px] text-neutral-500">
+                  Showing 8 of {visiblePoints.length} nodes · select a map marker to inspect
                 </div>
               )}
             </div>
+          )}
+
+          <div className="border-t border-neutral-800 px-4 py-3 text-[10px] text-neutral-500">
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-1.5"><Building2 className="h-3 w-3" /> Lagos operations region</span>
+              <span className="font-mono">WGS 84</span>
+            </div>
           </div>
-        )}
+        </aside>
       </div>
-    </div>
+    </section>
   );
 };

@@ -21,7 +21,7 @@ import type {
 
 import { Navigation } from './components/Navigation.tsx';
 import { EnvironmentalImpactBar } from './components/EnvironmentalImpactBar.tsx';
-import { GeospatialMap } from './components/GeospatialMap.tsx';
+import { GeospatialMap } from './components/GeospatialMap';
 import { ResourcesView } from './components/ResourcesView.tsx';
 import { ResourceScannerModal } from './components/ResourceScannerModal.tsx';
 import { MarketplaceView } from './components/MarketplaceView.tsx';
