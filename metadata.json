@@ -1,0 +1,6 @@
+{
+  "name": "RECYCLN — Resource & Infrastructure Operating System",
+  "description": "Multi-tenant intelligent resource and infrastructure operating system connecting physical resources, logistics, facilities, geospatial intelligence, and AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
