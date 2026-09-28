@@ -43,16 +43,31 @@ export const LogisticsView: React.FC<LogisticsViewProps> = ({
   const [cargoDesc, setCargoDesc] = useState('');
   const [weightTonnes, setWeightTonnes] = useState('10.0');
   const [destName, setDestName] = useState('');
+  const [destinationPoint, setDestinationPoint] = useState<{ lat: number; lng: number; label: string } | null>(null);
+  const [destinationOptions, setDestinationOptions] = useState<Array<{ id: string; label: string; lat: number; lng: number }>>([]);
+  const [isSearchingDestination, setIsSearchingDestination] = useState(false);
   const [isSubmittingDispatch, setIsSubmittingDispatch] = useState(false);
 
   // POD Form
   const [signatureName, setSignatureName] = useState('');
-  const [podNotes, setPodNotes] = useState('Weighbridge tare verified by consignee representative.');
+  const [podNotes, setPodNotes] = useState('Consignee sign-off submitted; GPS and photo evidence not attached.');
   const [isSubmittingPod, setIsSubmittingPod] = useState(false);
+
+  const searchDestination = async () => {
+    if (!destName.trim()) return;
+    setIsSearchingDestination(true);
+    try {
+      setDestinationOptions(await api.geocodeNigeria(destName));
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Destination search failed');
+    } finally {
+      setIsSearchingDestination(false);
+    }
+  };
 
   const handleDispatch = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!dispatchVehicleId) return;
+    if (!dispatchVehicleId || !destinationPoint) return;
 
     setIsSubmittingDispatch(true);
     try {
@@ -64,9 +79,9 @@ export const LogisticsView: React.FC<LogisticsViewProps> = ({
         originName: currentOrg?.address || 'Origin Industrial Yard',
         originLat: currentOrg?.lat || 6.6025,
         originLng: currentOrg?.lng || 3.3522,
-        destinationName: destName || 'Central Smelter Terminal',
-        destinationLat: 6.4695,
-        destinationLng: 3.6185,
+        destinationName: destinationPoint.label,
+        destinationLat: destinationPoint.lat,
+        destinationLng: destinationPoint.lng,
         actorName: currentUser?.name || 'Fleet Dispatcher',
       });
       setShowDispatchModal(false);
@@ -205,7 +220,7 @@ export const LogisticsView: React.FC<LogisticsViewProps> = ({
                     <div className="text-neutral-500 text-[11px]">Destination Consignee:</div>
                     <div className="font-medium text-white">{job.destinationName}</div>
                     <div className="text-[11px] font-mono text-neutral-400 tabular-nums">
-                      Est. Distance: {job.estimatedDistanceKm} km · ETA: {job.estimatedDurationMins} mins
+                        {job.routeSource === 'MAPBOX_DIRECTIONS' ? 'Mapbox road route' : 'Straight-line estimate (no routing API)'}: {job.estimatedDistanceKm.toFixed(1)} km · {job.routeSource === 'MAPBOX_DIRECTIONS' ? 'Route ETA' : 'Rough ETA'}: {job.estimatedDurationMins} mins
                     </div>
                   </div>
                 </div>
@@ -228,7 +243,7 @@ export const LogisticsView: React.FC<LogisticsViewProps> = ({
                   <div className="p-3 bg-neutral-950 border border-neutral-800 rounded-lg text-xs space-y-1">
                     <div className="text-emerald-400 font-medium flex items-center gap-1.5">
                       <CheckCircle className="w-3.5 h-3.5" />
-                      <span>Proof of Delivery Verified & Stamped</span>
+                      <span>Consignee Sign-off Submitted (Not Independently Verified)</span>
                     </div>
                     <div className="text-neutral-300 text-[11px]">
                       Signatory: {job.proofOfDelivery.signatureName} · Timestamp:{' '}
@@ -414,9 +429,23 @@ export const LogisticsView: React.FC<LogisticsViewProps> = ({
                     required
                     placeholder="e.g. Sangotedo MRF Terminal"
                     value={destName}
-                    onChange={(e) => setDestName(e.target.value)}
+                    onChange={(e) => {
+                      setDestName(e.target.value);
+                      setDestinationPoint(null);
+                      setDestinationOptions([]);
+                    }}
                     className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-white"
                   />
+                  <button type="button" onClick={searchDestination} disabled={isSearchingDestination || !destName.trim()} className="mt-2 rounded-md bg-neutral-800 px-3 py-1.5 text-[11px] text-white disabled:opacity-50">
+                    {isSearchingDestination ? 'Searching…' : 'Search real destination in Nigeria'}
+                  </button>
+                  {destinationOptions.map((option) => (
+                    <button key={option.id} type="button" onClick={() => { setDestinationPoint(option); setDestName(option.label); setDestinationOptions([]); }} className="mt-1 block w-full rounded-md px-2 py-1.5 text-left text-[10px] text-cyan-200 hover:bg-neutral-800">
+                      {option.label} · {option.lat.toFixed(5)}, {option.lng.toFixed(5)}
+                    </button>
+                  ))}
+                  {destinationPoint && <div className="mt-1 text-[10px] text-emerald-300">Destination coordinates selected. Mapbox routing will be requested during dispatch.</div>}
+                  {!destinationPoint && <div className="mt-1 text-[10px] text-amber-300">Select a geocoded destination result before dispatch; no sample destination coordinates are substituted.</div>}
                 </div>
               </div>
             </div>
@@ -431,7 +460,7 @@ export const LogisticsView: React.FC<LogisticsViewProps> = ({
               </button>
               <button
                 type="submit"
-                disabled={isSubmittingDispatch}
+                disabled={isSubmittingDispatch || !destinationPoint}
                 className="px-4 py-2 text-xs font-semibold bg-emerald-400 hover:bg-emerald-300 text-neutral-950 rounded-lg cursor-pointer disabled:opacity-50"
               >
                 {isSubmittingDispatch ? 'Dispatching...' : 'Dispatch Trip'}

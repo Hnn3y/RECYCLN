@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { divIcon } from 'leaflet';
 import { MapContainer, Marker, TileLayer, ZoomControl, useMap } from 'react-leaflet';
 import type { Resource, Facility, Vehicle, InfrastructureReport, SatelliteDetection } from '../types/index.ts';
+import { api } from '../services/api.ts';
 import {
   Activity,
   AlertTriangle,
@@ -10,6 +11,7 @@ import {
   Check,
   CircleDot,
   Crosshair,
+  Eye,
   Factory,
   Layers3,
   MapPin,
@@ -27,6 +29,7 @@ const mapTileUrl = mapboxAccessToken
 const mapAttribution = mapboxAccessToken
   ? '&copy; <a href="https://www.mapbox.com/about/maps/">Mapbox</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
   : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
+const fallbackNasaImageryDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
 type EntityType = 'RESOURCE' | 'FACILITY' | 'VEHICLE' | 'INFRASTRUCTURE' | 'SATELLITE';
 
@@ -68,7 +71,7 @@ const layerConfig: Array<{
   { type: 'FACILITY', label: 'Facilities', color: '#60a5fa', icon: Factory },
   { type: 'VEHICLE', label: 'Fleet vehicles', color: '#c084fc', icon: Truck },
   { type: 'INFRASTRUCTURE', label: 'Civic alerts', color: '#fbbf24', icon: AlertTriangle },
-  { type: 'SATELLITE', label: 'Satellite candidates', color: '#22d3ee', icon: Satellite },
+  { type: 'SATELLITE', label: 'Field & satellite site pins', color: '#22d3ee', icon: Satellite },
 ];
 
 function createMarkerIcon(type: EntityType, selected: boolean) {
@@ -115,6 +118,16 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
   onSelectFacility,
 }) => {
   const [selectedEntity, setSelectedEntity] = useState<MapEntity | null>(null);
+  const [showNasaImagery, setShowNasaImagery] = useState(false);
+  const [nasaImageryDate, setNasaImageryDate] = useState(fallbackNasaImageryDate);
+
+  useEffect(() => {
+    api.getSatelliteScanStatus()
+      .then((status) => { if (status.imageryDate) setNasaImageryDate(status.imageryDate); })
+      .catch(() => undefined);
+  }, []);
+
+  const nasaImageryUrl = `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_NOAA20_CorrectedReflectance_TrueColor/default/${nasaImageryDate}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`;
   const [visibleLayers, setVisibleLayers] = useState<Set<EntityType>>(
     () => new Set(layerConfig.map((layer) => layer.type)),
   );
@@ -142,7 +155,7 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
       id: vehicle.id,
       type: 'VEHICLE' as const,
       title: `${vehicle.model} (${vehicle.registrationPlate})`,
-      subtitle: `Status: ${vehicle.currentStatus} · ${vehicle.locationName}`,
+      subtitle: `Last stored position · ${vehicle.currentStatus} · ${vehicle.locationName}`,
       lat: vehicle.currentLat,
       lng: vehicle.currentLng,
       raw: vehicle,
@@ -160,7 +173,7 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
       id: detection.id,
       type: 'SATELLITE' as const,
       title: detection.targetArea,
-      subtitle: `Candidate ${detection.detectionType.replace(/_/g, ' ')} · ${detection.changeAreaSqm.toLocaleString()} m²`,
+      subtitle: `${detection.detectionSource === 'FIELD_REPORTED' ? 'User-observed, unverified' : detection.detectionSource === 'LIVE_NASA_AI' ? 'NASA broad-area anomaly lead' : 'Demo record'} · ${detection.detectionType.replace(/_/g, ' ')}`,
       lat: detection.lat,
       lng: detection.lng,
       raw: detection,
@@ -193,14 +206,14 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-50" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
             </span>
-            Live operations · Lagos, Nigeria
+            Lagos network overview
           </div>
           <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">Network intelligence</h1>
           <p className="mt-1 text-sm text-neutral-400">Explore resources, processing capacity, fleet activity and field alerts.</p>
         </div>
         <div className="flex items-center gap-2 self-start rounded-lg border border-neutral-800 bg-neutral-900/80 px-3 py-2 text-xs text-neutral-300 xl:self-auto">
           <Radio className="h-3.5 w-3.5 text-emerald-400" />
-          <span>Network online</span>
+          <span>Network records</span>
           <span className="mx-1 h-3 w-px bg-neutral-700" />
           <span className="font-mono tabular-nums text-neutral-400">{visiblePoints.length} nodes in view</span>
         </div>
@@ -242,6 +255,16 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
               tileSize={256}
               maxZoom={20}
             />
+            {showNasaImagery && (
+              <TileLayer
+                attribution='&copy; <a href="https://www.earthdata.nasa.gov/data/instruments/viirs">NASA EOSDIS GIBS / VIIRS</a>'
+                url={nasaImageryUrl}
+                maxNativeZoom={9}
+                maxZoom={18}
+                opacity={0.88}
+                zIndex={300}
+              />
+            )}
             <ZoomControl position="bottomright" />
             <FitMapToEntities points={visiblePoints} />
             {visiblePoints.map((point) => (
@@ -260,6 +283,16 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
             <span className="text-xs font-medium text-white">Lagos industrial corridor</span>
             <span className="hidden border-l border-neutral-700 pl-2 font-mono text-[10px] text-neutral-400 sm:inline">6.5244° N · 3.3792° E</span>
           </div>
+
+          <button
+            type="button"
+            onClick={() => setShowNasaImagery((visible) => !visible)}
+            aria-pressed={showNasaImagery}
+            className={`absolute right-4 top-4 z-[500] inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-[11px] font-medium shadow-lg backdrop-blur-md transition ${showNasaImagery ? 'border-cyan-500/50 bg-cyan-950/90 text-cyan-200' : 'border-white/10 bg-neutral-950/85 text-neutral-200 hover:border-cyan-500/40'}`}
+          >
+            <Eye className="h-3.5 w-3.5" />
+            {showNasaImagery ? 'NASA imagery on' : 'NASA imagery'}
+          </button>
 
           <div className="pointer-events-none absolute bottom-4 left-4 z-[500] flex items-center gap-2 rounded-md border border-white/10 bg-neutral-950/85 px-2.5 py-1.5 text-[10px] text-neutral-300 shadow-lg backdrop-blur-md">
             <Layers3 className="h-3 w-3 text-emerald-400" />
@@ -448,7 +481,7 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
           <div className="border-t border-neutral-800 px-4 py-3 text-[10px] text-neutral-500">
             <div className="flex items-center justify-between">
               <span className="flex items-center gap-1.5"><Building2 className="h-3 w-3" /> Lagos operations region</span>
-              <span className="font-mono">{mapboxAccessToken ? 'MAPBOX · WGS 84' : 'CARTO · WGS 84'}</span>
+              <span className="font-mono">{showNasaImagery ? `NASA VIIRS · ${nasaImageryDate}` : `${mapboxAccessToken ? 'MAPBOX' : 'CARTO'} · WGS 84`}</span>
             </div>
           </div>
         </aside>

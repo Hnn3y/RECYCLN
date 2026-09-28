@@ -36,21 +36,22 @@ export interface ScannerResult {
 
 export async function scanResourceImage(imageBase64?: string, textHint?: string): Promise<ScannerResult> {
   const ai = getAiClient();
+  if (!ai) throw new Error('GEMINI_API_KEY is required for resource scanning.');
+  if (!imageBase64 && !textHint) throw new Error('Provide an image or material description to scan.');
 
-  if (ai && (imageBase64 || textHint)) {
-    try {
-      const parts: any[] = [];
-      if (imageBase64) {
-        const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
-        parts.push({
-          inlineData: {
-            mimeType: 'image/jpeg',
-            data: cleanBase64,
-          },
-        });
-      }
+  try {
+    const parts: any[] = [];
+    if (imageBase64) {
+      const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
       parts.push({
-        text: `You are RECYCLN's industrial vision and resource classification engine.
+        inlineData: {
+          mimeType: 'image/jpeg',
+          data: cleanBase64,
+        },
+      });
+    }
+    parts.push({
+      text: `You are RECYCLN's industrial vision and resource classification engine.
 Analyze this industrial asset, material stockpile, scrap, or equipment:
 ${textHint ? `User description hint: ${textHint}` : ''}
 
@@ -65,8 +66,8 @@ Respond in strictly valid JSON with this format:
   "recommendedPathway": "One of: DIRECT_REUSE, REFURBISHMENT, SMELTING, CHEMICAL_RECYCLING, REMANUFACTURING",
   "estimatedValuePerUnit": 2100,
   "currency": "USD",
-  "technicalNotes": "Short 2-sentence technical evaluation of recyclability, contamination, and handling precautions."
-}`,
+  "technicalNotes": "Short 2-sentence technical evaluation of recyclability, contamination, and handling precautions. State uncertainty; do not claim inspection or verification."
+  }`,
       });
 
       const response = await ai.models.generateContent({
@@ -79,40 +80,87 @@ Respond in strictly valid JSON with this format:
       });
 
       const text = response.text?.trim();
-      if (text) {
-        const parsed = JSON.parse(text);
-        return {
-          detectedObject: parsed.detectedObject || 'Industrial Resource',
-          materialType: parsed.materialType || 'Industrial Scrap Grade A',
-          category: parsed.category || 'Non-Ferrous Metals',
-          estimatedPurityPercent: Number(parsed.estimatedPurityPercent) || 90,
-          visibleCondition: parsed.visibleCondition || 'GOOD',
-          approximateWeightEstimate: parsed.approximateWeightEstimate || '5 - 15 tonnes',
-          recommendedPathway: parsed.recommendedPathway || 'SMELTING',
-          estimatedValuePerUnit: Number(parsed.estimatedValuePerUnit) || 1200,
-          currency: parsed.currency || 'USD',
-          technicalNotes: parsed.technicalNotes || 'Inspection verified by vision scan.',
-        };
-      }
-    } catch (err) {
-      console.warn('Gemini vision scan call failed, falling back to deterministic extraction:', err);
+      if (!text) throw new Error('The AI provider returned an empty scanner result.');
+      const parsed = JSON.parse(text);
+      return {
+        detectedObject: parsed.detectedObject || 'Unclassified material',
+        materialType: parsed.materialType || 'Unclassified',
+        category: parsed.category || 'Unclassified',
+        estimatedPurityPercent: Number(parsed.estimatedPurityPercent) || 0,
+        visibleCondition: parsed.visibleCondition || 'FAIR',
+        approximateWeightEstimate: parsed.approximateWeightEstimate || 'Not estimated from image',
+        recommendedPathway: parsed.recommendedPathway || 'Requires human assessment',
+        estimatedValuePerUnit: Number(parsed.estimatedValuePerUnit) || 0,
+        currency: parsed.currency || 'USD',
+        technicalNotes: parsed.technicalNotes || 'AI output requires human review; image alone does not verify material properties.',
+      };
+    } catch (error) {
+      console.error('Gemini resource scan failed:', error instanceof Error ? error.message : 'Unknown provider error');
+      throw new Error('Resource scanning failed; no synthetic result was substituted. Check Gemini connectivity and the AI response.');
     }
+}
+
+export interface DumpSiteVisualFinding {
+  x: number;
+  y: number;
+  label: string;
+  confidenceScore: number;
+  estimatedAreaSqm: number;
+  reasoning: string;
+}
+
+export async function findDumpSiteCandidates(
+  imageBase64: string,
+  regionName: string,
+  imageryDate: string,
+): Promise<DumpSiteVisualFinding[]> {
+  const ai = getAiClient();
+  if (!ai) {
+    throw new Error('GEMINI_API_KEY is required for AI satellite screening. Configure it in the server .env and restart the server.');
   }
 
-  // Graceful deterministic fallback when no external key is active or provided
-  return {
-    detectedObject: textHint ? `Identified Material (${textHint})` : 'Architectural Scrap Extrusion Profile',
-    materialType: 'Aluminium 6063 Alloy',
-    category: 'Non-Ferrous Metals',
-    estimatedPurityPercent: 96,
-    visibleCondition: 'GOOD',
-    approximateWeightEstimate: '8.5 - 12.0 metric tonnes',
-    recommendedPathway: 'SMELTING',
-    estimatedValuePerUnit: 2150,
-    currency: 'USD',
-    technicalNotes:
-      'Optical density and cross-section geometry indicate clean structural alloy with minimal anodized coating loss. Suitable for single-melt billet casting.',
-  };
+  const response = await ai.models.generateContent({
+    model: 'gemini-3.8-flash',
+    contents: {
+      parts: [
+        {
+          inlineData: {
+            mimeType: 'image/jpeg',
+            data: imageBase64,
+          },
+        },
+        {
+          text: `You are screening a NASA VIIRS NOAA-20 corrected-reflectance true-colour satellite tile for broad possible land-surface anomalies near ${regionName}, Nigeria, with source date ${imageryDate}. VIIRS pixels are hundreds of metres across and the image is a broad regional tile, not high-resolution site imagery. Image origin is top-left; x grows right and y grows down.
+
+Return JSON only in this exact shape: {"findings":[{"x":0.0,"y":0.0,"label":"broad anomaly area","confidenceScore":70,"estimatedAreaSqm":0,"reasoning":"brief visible evidence"}]}. x and y must be normalized from 0 to 1. Return at most 3 findings.
+
+Be extremely conservative: at this resolution do not claim to identify a dumpsite or estimate its area. Only return a low-confidence broad visual anomaly if a conspicuous unusual exposed-surface pattern is clearly visible; otherwise return an empty findings array. Do not treat bare soil, settlements, industrial yards, quarries, fires, or cloud/haze as dumpsites. This image cannot resolve waste, establish a dumpsite, or support precise coordinates. A returned pin is only an approximate area for later inspection with higher-resolution imagery. Confidence is a model screening score, not a probability or verification. Never invent features.`
+        },
+      ],
+    },
+    config: {
+      responseMimeType: 'application/json',
+      temperature: 0.1,
+    },
+  });
+
+  const text = response.text?.trim();
+  if (!text) throw new Error('AI satellite screening returned an empty response.');
+  const parsed = JSON.parse(text) as { findings?: Array<Partial<DumpSiteVisualFinding>> };
+  if (!Array.isArray(parsed.findings)) throw new Error('AI satellite screening returned an invalid findings payload.');
+
+  return parsed.findings
+    .filter((finding) => Number.isFinite(finding.x) && Number.isFinite(finding.y))
+    .map((finding) => ({
+      x: Math.min(1, Math.max(0, Number(finding.x))),
+      y: Math.min(1, Math.max(0, Number(finding.y))),
+      label: String(finding.label || 'Possible exposed waste accumulation').slice(0, 100),
+      confidenceScore: Math.min(100, Math.max(0, Math.round(Number(finding.confidenceScore) || 0))),
+      estimatedAreaSqm: 0,
+      reasoning: String(finding.reasoning || 'Visual anomaly flagged for field review.').slice(0, 500),
+    }))
+    .filter((finding) => finding.confidenceScore >= 40)
+    .slice(0, 3);
 }
 
 export interface CopilotProcessResult {
@@ -138,6 +186,7 @@ export async function processCopilotMessage(
   mode: 'SUPPORT' | 'OPERATIONS' | 'TRANSACTION'
 ): Promise<CopilotProcessResult> {
   const ai = getAiClient();
+  if (!ai) throw new Error('GEMINI_API_KEY is required for the Operations Copilot.');
 
   // Execute real database tool queries for context
   const activeResources = db.get('resources').filter((r) => r.status === 'AVAILABLE');
@@ -150,7 +199,6 @@ export async function processCopilotMessage(
 
   const queryLower = userQuery.toLowerCase();
   const toolCalls: any[] = [];
-  let consequentialAction: any = undefined;
 
   // Tool selection: searchResources
   if (queryLower.includes('resource') || queryLower.includes('aluminium') || queryLower.includes('metal') || queryLower.includes('plastic') || queryLower.includes('steel')) {
@@ -164,8 +212,8 @@ export async function processCopilotMessage(
       toolName: 'searchResources',
       input: { query: userQuery, status: 'AVAILABLE' },
       output: {
-        totalFound: matched.length > 0 ? matched.length : activeResources.length,
-        items: (matched.length > 0 ? matched : activeResources).slice(0, 3).map((r) => ({
+        totalFound: matched.length,
+        items: matched.slice(0, 3).map((r) => ({
           id: r.id,
           name: r.name,
           quantity: `${r.quantity} ${r.unit}`,
@@ -211,29 +259,7 @@ export async function processCopilotMessage(
     });
   }
 
-  // Consequential action detection in Transaction Mode
-  if (mode === 'TRANSACTION' || queryLower.includes('assign') || queryLower.includes('dispatch') || queryLower.includes('book') || queryLower.includes('create pickup')) {
-    const targetVehicle = availableVehicles[0] || db.get('vehicles')[0];
-    const targetResource = activeResources[0];
-
-    consequentialAction = {
-      actionType: 'DISPATCH_LOGISTICS_JOB',
-      summary: `Dispatch ${targetVehicle.model} (${targetVehicle.registrationPlate}) to pick up ${targetResource?.name || 'Assigned Resource'} from ${targetResource?.locationName || 'Origin Yard'}.`,
-      payload: {
-        vehicleId: targetVehicle.id,
-        vehiclePlate: targetVehicle.registrationPlate,
-        cargoDescription: targetResource?.name || 'Industrial Batch',
-        weightTonnes: 10.0,
-        originLocation: targetResource?.locationName || 'Industrial Park Gate 1',
-        destinationLocation: 'Central Processing Smelter',
-      },
-      executed: false,
-    };
-  }
-
-  // Prompt Gemini if key is available
-  if (ai) {
-    try {
+  try {
       const systemInstruction = `You are RECYCLN's AI Operations Copilot — an industrial operating system intelligence.
 Operating Mode: ${mode}.
 User Role: ${userRole}.
@@ -266,44 +292,17 @@ Provide a concise, professional operational briefing and recommend next operatio
         },
       });
 
-      const reply = response.text || 'Operational briefing generated.';
+      const reply = response.text?.trim();
+      if (!reply) throw new Error('The AI provider returned an empty Copilot response.');
       return {
         reply,
         mode,
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-        consequentialAction,
       };
-    } catch (err) {
-      console.warn('Gemini copilot call failed, using deterministic response:', err);
-    }
+  } catch (error) {
+    console.error('Gemini copilot request failed:', error instanceof Error ? error.message : 'Unknown provider error');
+    throw new Error('Copilot request failed; no synthetic briefing or dispatch action was substituted. Check Gemini connectivity.');
   }
-
-  // High-fidelity domain-grounded response when running without external API key
-  let reply = '';
-  if (mode === 'SUPPORT') {
-    reply = `RECYCLN Compliance & Operations Guide:
-Every resource registered on the network receives a cryptographic Resource Passport (ISO 14021 & W3C Verifiable Credential compatible) tracking provenance, material purity, batch inspections, and custody events.
-Transactions follow an irrevocable state machine: Offer → Acceptance → Escrow Reserve → Logistics Dispatch → Weighbridge Verification → Final Settlement.
-All physical inventory transfers update linked warehouse records synchronously with transactional concurrency locks to eliminate double-allocation.`;
-  } else if (mode === 'TRANSACTION') {
-    reply = `Consequential Action Prepared:
-I have structured the haulage dispatch job based on current real-time fleet availability (${availableVehicles.length} vehicles stationed).
-Before this dispatch order is committed to the live dispatch queue and driver manifest, please review and confirm the action details below.`;
-  } else {
-    // Operations mode
-    reply = `RECYCLN Live Operations Briefing:
-• Active Resources: ${activeResources.length} verified lots (${activeResources.reduce((acc, r) => acc + r.quantity, 0).toFixed(1)} tonnes total)
-• Fleet Deployment: ${availableVehicles.length} vehicles available for dispatch across Lagos Industrial corridors.
-• Facility Capacity: Apex Smelter has ${facilities[0]?.availableCapacityTonnesPerMonth || 380} tonnes/mo open capacity; Ecovanguard MRF has ${facilities[1]?.availableCapacityTonnesPerMonth || 210} tonnes/mo available.
-• AI Matching: 2 cross-organization resource matches identified between Apex Metals and Ecovanguard Polymers.`;
-  }
-
-  return {
-    reply,
-    mode,
-    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-    consequentialAction,
-  };
 }
 
 export function computeValuation(

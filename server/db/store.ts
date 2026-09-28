@@ -852,34 +852,6 @@ export class DatabaseStore {
     ];
 
     const satelliteDetections: SatelliteDetection[] = [
-      {
-        id: 'sat-det-2026-01',
-        sourceSatellite: 'Sentinel-2',
-        targetArea: 'Olusosun Perimeter Sector 4',
-        lat: 6.5892,
-        lng: 3.3821,
-        detectionType: 'LANDFILL_VOLUME_EXPANSION',
-        confidenceScore: 88,
-        status: 'UNVERIFIED_CANDIDATE',
-        imageryDate: '2026-09-24',
-        changeAreaSqm: 4200,
-        candidateNotes: 'Multispectral NDVI and SWIR index indicates a 4,200 m² change in surface reflective profile consistent with newly deposited organic/industrial mass. Ground inspection dispatched.',
-        bounds: { north: 6.592, south: 6.586, east: 3.385, west: 3.379 },
-      },
-      {
-        id: 'sat-det-2026-02',
-        sourceSatellite: 'Copernicus-DEM',
-        targetArea: 'Ikorodu Waterfront Industrial Corridor',
-        lat: 6.6180,
-        lng: 3.4980,
-        detectionType: 'SCRAP_METAL_ACCUMULATION',
-        confidenceScore: 82,
-        status: 'UNVERIFIED_CANDIDATE',
-        imageryDate: '2026-09-21',
-        changeAreaSqm: 1850,
-        candidateNotes: 'High radar backscatter anomaly indicative of dense metallic pile expansion (>2m elevation change). Candidate for circular salvage outreach.',
-        bounds: { north: 6.621, south: 6.615, east: 3.501, west: 3.495 },
-      },
     ];
 
     const auditLogs: AuditLog[] = [

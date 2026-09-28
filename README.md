@@ -237,22 +237,32 @@ npm run dev
 
 ### Environment Variables
 
-RECYCLN is designed so that dropping in real API keys is all that's needed to go from a limited demo to a fully live platform. Configure these in `.env` (or via the in-app Admin → Integrations panel once running):
+The current build has working adapters for NASA GIBS imagery, Gemini AI, and Mapbox geocoding/tiles. Other credentials do not automatically make their features live; the matching payment, email, SMS, object-storage, routing and production database adapters still need implementation/configuration. Configure supported credentials in server `.env` (or use Admin → Integrations where supported):
 
 | Category | Keys |
 |---|---|
 | Maps & Routing | `VITE_MAPBOX_ACCESS_TOKEN` (public, domain-restricted map tiles), `MAPBOX_API_KEY` (server-side geocoding), `OPENROUTESERVICE_API_KEY` |
-| Satellite / EO | `SENTINEL_HUB_CLIENT_ID`, `SENTINEL_HUB_CLIENT_SECRET` |
-| Payments | `PAYSTACK_SECRET_KEY`, `FLUTTERWAVE_SECRET_KEY` |
-| AI / Vision | `LLM_API_KEY`, `VISION_MODEL_API_KEY` |
-| Messaging | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` |
-| Email | `SENDGRID_API_KEY` |
+| Satellite / EO | `NASA_OPEN_API` (general api.nasa.gov key; NASA GIBS imagery is public and does not require it) |
+| Payments (diagnostic only) | `PAYSTACK_SECRET_KEY`, `FLUTTERWAVE_SECRET_KEY` |
+| AI / Vision | `GEMINI_API_KEY` (active Copilot, scanner and satellite screening); `LLM_API_KEY`, `VISION_MODEL_API_KEY` are unused provider placeholders |
+| Messaging (credential check only) | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` |
+| Email (credential check only) | `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL` |
 | Storage | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET` |
 | Core | `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET` |
 
-See `.env.example` for the complete list and links to where to obtain each key. The Admin → Integrations page checks Copernicus OAuth, Twilio account authentication, and SendGrid API-key authentication when their required credentials are present.
+See `.env.example` for key names and links. Integration checks verify selected credentials, but a successful credential check alone does not mean the corresponding product workflow is implemented or connected.
 
 The current AI and image-scanning adapter uses `GEMINI_API_KEY`. `LLM_API_KEY` and `VISION_MODEL_API_KEY` are included as provider-specific configuration slots; they are not consumed until an LLM/vision vendor adapter is selected. Keep all service credentials server-side and out of `VITE_` variables.
+
+### Live satellite screening
+
+In **Satellite Intel**, choose a scan area and select **Screen NASA imagery**. The server retrieves a recent NASA EOSDIS GIBS VIIRS NOAA-20 true-colour tile, then asks Gemini to screen it for broad visual anomalies. Candidate pins are saved and appear on **Network Map** after data refresh. This requires `GEMINI_API_KEY`; set NASA's optional general API key as `NASA_OPEN_API` in the server `.env` if you use other `api.nasa.gov` endpoints. The GIBS imagery is public and does not accept this API key. Restart the server after changing environment variables.
+
+The map can display NASA VIIRS imagery using the **NASA imagery** toggle. Current scan windows include the LASU–Igando Expressway corridor and selected corridors near Lagos, Abuja, Kano, Port Harcourt, and Ibadan—not all of Nigeria. VIIRS pixels are hundreds of metres across, so this imagery cannot locate or confirm individual dumpsites. AI results are broad, approximate leads only and require higher-resolution imagery and field inspection. Add higher-resolution Earth-observation data and a validated detection model before using this for site-level operational decisions. The app no longer seeds or serves fabricated dump-site pins. User-observed locations can be searched, clicked to exact coordinates, and saved as **unverified field reports**; the reporter must supply and verify the exact location.
+
+### Current live-data limitations
+
+The application backend currently persists to a local JSON file (`data/recycln.db.json`); `/api/health` reports this and notes that it is not multi-instance safe. The bundled data includes seeded sample records. There is no production database adapter, real user authentication provider, or production identity/authorization layer in this build. Payment transactions, SMS/email delivery, external object storage, route optimization, and nationwide dump-site monitoring are not made live by setting keys alone. Do not treat the current build as a production operations system until these adapters, data migration, access controls, and higher-resolution validated detection are in place.
 
 The geospatial map uses CARTO dark tiles when `VITE_MAPBOX_ACCESS_TOKEN` is empty. To enable Mapbox tiles, set this variable in your local `.env` to a **public token restricted to your app's allowed URLs**, then restart the dev server. Because Vite exposes `VITE_` variables in browser code, never use a secret/server-side Mapbox token here.
 

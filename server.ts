@@ -31,6 +31,9 @@ async function startServer() {
     res.json({
       status: 'healthy',
       system: 'RECYCLN Operating System Core',
+      dataStore: 'local-json-file',
+      multiInstanceSafe: false,
+      note: 'This deployment stores application data in a local JSON file; configure a shared production database before multi-instance/live operations.',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
     });

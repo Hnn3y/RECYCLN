@@ -34,8 +34,7 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
     {
       id: 'init-1',
       sender: 'assistant',
-      content:
-        'Welcome to RECYCLN AI Operations Copilot. Connected to live network nodes: 12.5t aluminium scrap available at Ikeja, 3 haulage trucks stationed, and 380t/mo induction capacity ready. How can I assist operations?',
+      content: 'Ask about resources, facilities, fleet, or operations. Answers require a successful AI connection and use data currently stored by this RECYCLN instance.',
       timestamp: new Date().toLocaleTimeString(),
       mode: 'OPERATIONS',
     },
@@ -154,7 +153,7 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
             <div className="text-sm font-bold text-white flex items-center gap-1.5 font-display">
               <span>Operations Copilot</span>
               <span className="text-[10px] font-mono text-emerald-400 px-1.5 py-0.2 bg-emerald-950/60 rounded border border-emerald-800">
-                LIVE
+                AI
               </span>
             </div>
             <div className="text-[11px] text-neutral-400">

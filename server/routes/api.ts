@@ -21,6 +21,7 @@ import {
   testProviderConnection,
   saveIntegrationKey,
 } from '../services/integration.service.ts';
+import { getSatelliteScanStatus, scanSatelliteRegion } from '../services/satellite.service.ts';
 
 export const apiRouter = Router();
 
@@ -758,11 +759,44 @@ apiRouter.post('/logistics/dispatch', async (req: Request, res: Response) => {
     });
   }
 
-  const oLat = Number(originLat) || 6.6025;
-  const oLng = Number(originLng) || 3.3522;
-  const dLat = Number(destinationLat) || 6.4695;
-  const dLng = Number(destinationLng) || 3.6185;
-  const dist = calculateDistanceKm(oLat, oLng, dLat, dLng);
+  const oLat = Number(originLat);
+  const oLng = Number(originLng);
+  const dLat = Number(destinationLat);
+  const dLng = Number(destinationLng);
+  const coordinatesAreValid = [oLat, oLng, dLat, dLng].every(Number.isFinite)
+    && Math.abs(oLat) <= 90 && Math.abs(dLat) <= 90
+    && Math.abs(oLng) <= 180 && Math.abs(dLng) <= 180;
+  if (!coordinatesAreValid) {
+    return res.status(400).json({ error: 'Valid origin and geocoded destination coordinates are required; sample coordinates are not substituted.' });
+  }
+  if (!Number.isFinite(Number(weightTonnes)) || Number(weightTonnes) <= 0) {
+    return res.status(400).json({ error: 'Cargo weight must be a positive number of tonnes.' });
+  }
+  let dist = calculateDistanceKm(oLat, oLng, dLat, dLng);
+  let durationMins = Math.round(dist * 1.8);
+  let routeSource: 'MAPBOX_DIRECTIONS' | 'STRAIGHT_LINE_ESTIMATE' = 'STRAIGHT_LINE_ESTIMATE';
+  const mapboxToken = process.env.MAPBOX_API_KEY?.trim();
+
+  if (mapboxToken) {
+    try {
+      const routeUrl = new URL(`https://api.mapbox.com/directions/v5/mapbox/driving/${oLng},${oLat};${dLng},${dLat}`);
+      routeUrl.searchParams.set('access_token', mapboxToken);
+      routeUrl.searchParams.set('overview', 'false');
+      routeUrl.searchParams.set('alternatives', 'false');
+      const routeResponse = await fetch(routeUrl, { signal: AbortSignal.timeout(12_000) });
+      if (!routeResponse.ok) {
+        return res.status(502).json({ error: `Mapbox driving route failed (HTTP ${routeResponse.status}); dispatch was not created.` });
+      }
+      const routePayload = await routeResponse.json() as { routes?: Array<{ distance: number; duration: number }> };
+      const route = routePayload.routes?.[0];
+      if (!route) return res.status(422).json({ error: 'Mapbox could not find a drivable route; dispatch was not created.' });
+      dist = route.distance / 1000;
+      durationMins = Math.round(route.duration / 60);
+      routeSource = 'MAPBOX_DIRECTIONS';
+    } catch (error) {
+      return res.status(502).json({ error: `Mapbox routing unavailable; dispatch was not created. ${error instanceof Error ? error.message : ''}` });
+    }
+  }
 
   const jobId = `job-${Date.now().toString(36)}`;
   const job: LogisticsJob = {
@@ -784,9 +818,10 @@ apiRouter.post('/logistics/dispatch', async (req: Request, res: Response) => {
     driverName: driver?.name || 'Assigned Driver',
     status: 'IN_TRANSIT',
     estimatedDistanceKm: dist,
-    estimatedDurationMins: Math.round(dist * 1.8),
-    backhaulMatched: true,
-    backhaulDetails: 'Backhaul opportunity identified: 8 tonnes of sorted polymer scrap on return path.',
+    estimatedDurationMins: durationMins,
+    routeSource,
+    backhaulMatched: false,
+    backhaulDetails: 'No live backhaul matching provider is connected; no return cargo match is asserted.',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -819,23 +854,26 @@ apiRouter.post('/logistics/jobs/:id/pod', async (req: Request, res: Response) =>
 
   if (!job) return res.status(404).json({ error: 'Logistics job not found.' });
 
+  const gpsLat = Number(req.body.verifiedGpsLat);
+  const gpsLng = Number(req.body.verifiedGpsLng);
+  const hasValidGps = Number.isFinite(gpsLat) && gpsLat >= -90 && gpsLat <= 90
+    && Number.isFinite(gpsLng) && gpsLng >= -180 && gpsLng <= 180;
+
   await db.withTransaction(() => {
     job.status = 'DELIVERED';
     job.proofOfDelivery = {
       signatureName: signatureName || 'Authorized Receiver',
-      photoUrl: photoUrl || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&w=800&q=80',
+      photoUrl: typeof photoUrl === 'string' && photoUrl.trim() ? photoUrl.trim() : undefined,
       deliveredAt: new Date().toISOString(),
-      verifiedGpsLat: job.destinationLat,
-      verifiedGpsLng: job.destinationLng,
-      notes: notes || 'Delivery completed and verified at destination weighbridge.',
+      ...(hasValidGps ? { verifiedGpsLat: gpsLat, verifiedGpsLng: gpsLng } : {}),
+      notes: notes || 'Consignee sign-off submitted; not independently verified by RECYCLN.',
     };
     job.updatedAt = new Date().toISOString();
 
     const vehicle = db.get('vehicles').find((v) => v.id === job.vehicleId);
     if (vehicle) {
       vehicle.currentStatus = 'AVAILABLE';
-      vehicle.currentLat = job.destinationLat;
-      vehicle.currentLng = job.destinationLng;
+      // No telematics feed is connected; keep the vehicle's last reported GPS position unchanged.
     }
   });
 
@@ -941,8 +979,91 @@ apiRouter.post('/infrastructure/:id/triage', async (req: Request, res: Response)
 // -------------------------------------------------------------
 // 10. SATELLITE INTELLIGENCE
 // -------------------------------------------------------------
+apiRouter.get('/satellite/scan-status', async (req: Request, res: Response) => {
+  res.json(await getSatelliteScanStatus());
+});
+
+apiRouter.post('/maps/geocode', async (req: Request, res: Response) => {
+  const query = typeof req.body?.query === 'string' ? req.body.query.trim().slice(0, 200) : '';
+  const token = process.env.MAPBOX_API_KEY?.trim();
+  if (!query) return res.status(400).json({ error: 'A search query is required.' });
+  if (!token) return res.status(503).json({ error: 'MAPBOX_API_KEY is missing on the server.' });
+
+  try {
+    const url = new URL(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json`);
+    url.searchParams.set('access_token', token);
+    url.searchParams.set('country', 'ng');
+    url.searchParams.set('limit', '5');
+    url.searchParams.set('types', 'address,poi,locality,neighborhood,place');
+    const response = await fetch(url, { signal: AbortSignal.timeout(12_000) });
+    if (!response.ok) return res.status(502).json({ error: `Mapbox geocoding failed (HTTP ${response.status}).` });
+    const payload = await response.json() as { features?: Array<{ id: string; place_name: string; center: [number, number]; relevance?: number }> };
+    res.json((payload.features || []).map((feature) => ({
+      id: feature.id,
+      label: feature.place_name,
+      lng: feature.center[0],
+      lat: feature.center[1],
+      relevance: feature.relevance,
+    })));
+  } catch (error) {
+    res.status(502).json({ error: error instanceof Error ? error.message : 'Mapbox geocoding request failed.' });
+  }
+});
+
+apiRouter.post('/satellite/field-report', async (req: Request, res: Response) => {
+  const { targetArea, lat, lng, reporterName, reporterOrgName, candidateNotes } = req.body || {};
+  const latitude = Number(lat);
+  const longitude = Number(lng);
+  if (typeof targetArea !== 'string' || targetArea.trim().length < 4) {
+    return res.status(400).json({ error: 'Describe the observed site (at least 4 characters).' });
+  }
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+    return res.status(400).json({ error: 'Valid latitude and longitude are required. Select the exact location on the map.' });
+  }
+
+  const reportedAt = new Date().toISOString();
+  const detection: import('../../src/types/index.ts').SatelliteDetection = {
+    id: `field-site-${Date.now().toString(36)}`,
+    sourceSatellite: 'Field Report',
+    targetArea: targetArea.trim().slice(0, 160),
+    lat: latitude,
+    lng: longitude,
+    detectionType: 'ILLEGAL_DUMP_CANDIDATE',
+    confidenceScore: 0,
+    status: 'UNVERIFIED_CANDIDATE',
+    imageryDate: reportedAt.slice(0, 10),
+    changeAreaSqm: 0,
+    detectionSource: 'FIELD_REPORTED',
+    reporterName: typeof reporterName === 'string' ? reporterName.trim().slice(0, 100) : undefined,
+    reporterOrgName: typeof reporterOrgName === 'string' ? reporterOrgName.trim().slice(0, 140) : undefined,
+    reportedAt,
+    candidateNotes: typeof candidateNotes === 'string' && candidateNotes.trim()
+      ? candidateNotes.trim().slice(0, 1200)
+      : 'User-submitted field observation. This report has not been independently verified.',
+    bounds: { north: latitude, south: latitude, east: longitude, west: longitude },
+  };
+
+  db.get('satelliteDetections').unshift(detection);
+  db.persist();
+  res.status(201).json(detection);
+});
+
+apiRouter.post('/satellite/scan', async (req: Request, res: Response) => {
+  const { regionId } = req.body as { regionId?: string };
+  if (!regionId) return res.status(400).json({ error: 'regionId is required.' });
+
+  try {
+    const result = await scanSatelliteRegion(regionId);
+    res.json(result);
+  } catch (error: any) {
+    const message = error instanceof Error ? error.message : 'Satellite screening failed.';
+    const status = /not set in the server environment|GEMINI_API_KEY is required/i.test(message) ? 503 : 502;
+    res.status(status).json({ error: 'Live satellite screening failed.', message });
+  }
+});
+
 apiRouter.get('/satellite', (req: Request, res: Response) => {
-  res.json(db.get('satelliteDetections'));
+  res.json(db.get('satelliteDetections').filter((detection) => detection.detectionSource !== 'SEEDED_DEMO'));
 });
 
 // -------------------------------------------------------------

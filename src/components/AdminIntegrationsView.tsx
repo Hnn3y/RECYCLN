@@ -111,7 +111,7 @@ export const AdminIntegrationsView: React.FC<AdminIntegrationsViewProps> = ({
           <div className="p-4 bg-neutral-900 border border-neutral-800 rounded-xl space-y-1">
             <h2 className="text-sm font-semibold text-white">External Provider Readiness Status</h2>
             <div className="text-xs text-neutral-400 leading-relaxed">
-              Every external capability (maps/routing, satellite/EO imagery, payments, LLM/vision, SMS/WhatsApp, storage) is backed by a swappable interface. Dropping in credentials here or in environment variables transitions capabilities seamlessly from "Not Configured" to fully live.
+              Tests verify provider connectivity or credentials only. A configured key does not mean an app workflow is implemented; rows describe the specific capability each check covers.
             </div>
           </div>
 

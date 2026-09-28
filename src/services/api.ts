@@ -282,6 +282,67 @@ export const api = {
     return res.json();
   },
 
+  async geocodeNigeria(query: string): Promise<Array<{ id: string; label: string; lat: number; lng: number; relevance?: number }>> {
+    const res = await fetch(`${API_BASE}/maps/geocode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query }),
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'Nigeria location search failed');
+    return result;
+  },
+
+  async createSatelliteFieldReport(data: {
+    targetArea: string;
+    lat: number;
+    lng: number;
+    reporterName?: string;
+    reporterOrgName?: string;
+    candidateNotes?: string;
+  }): Promise<SatelliteDetection> {
+    const res = await fetch(`${API_BASE}/satellite/field-report`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'Could not save field observation');
+    return result;
+  },
+
+  async getSatelliteScanStatus(): Promise<{
+    configured: boolean;
+    missing: string[];
+    imagerySource: string;
+    imageryAvailable: boolean;
+    imageryDate: string | null;
+    imageryError: string | null;
+    nasaOpenApiKeyConfigured: boolean;
+    nasaOpenApiKeyNote: string;
+    imageryResolutionNote: string;
+    regions: Array<{ id: string; name: string; state: string; center: { lat: number; lng: number } }>;
+  }> {
+    const res = await fetch(`${API_BASE}/satellite/scan-status`);
+    if (!res.ok) throw new Error('Failed to load satellite scan status');
+    return res.json();
+  },
+
+  async scanSatelliteRegion(regionId: string): Promise<{
+    region: { id: string; name: string; state: string; center: { lat: number; lng: number } };
+    scene: { id: string; datetime: string; cloudCover?: number };
+    detections: SatelliteDetection[];
+  }> {
+    const res = await fetch(`${API_BASE}/satellite/scan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ regionId }),
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.message || result.error || 'Live satellite screening failed');
+    return result;
+  },
+
   // Copilot
   async sendCopilotMessage(query: string, mode: string, userRole: string, userOrgId: string): Promise<any> {
     const res = await fetch(`${API_BASE}/copilot/chat`, {

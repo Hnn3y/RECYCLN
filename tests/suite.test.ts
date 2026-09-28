@@ -91,7 +91,7 @@ async function runTestSuite() {
 
   // 8. AI Copilot Tool Execution
   const copilotRes = await processCopilotMessage('Check fleet trucks available', 'LOGISTICS_OPERATOR', 'org-swifttrans', 'OPERATIONS');
-  assert(copilotRes.toolCalls && copilotRes.toolCalls.length > 0, 'AI Copilot executed server-side tool calls against real data');
+  assert(Boolean(copilotRes.toolCalls?.length), 'AI Copilot executed server-side tool calls against real data');
 
   // 9. Integrations Status Check
   const integrations = getIntegrationsList();

@@ -352,14 +352,15 @@ export interface LogisticsJob {
   status: LogisticsJobStatus;
   estimatedDistanceKm: number;
   estimatedDurationMins: number;
+  routeSource?: 'MAPBOX_DIRECTIONS' | 'STRAIGHT_LINE_ESTIMATE';
   backhaulMatched?: boolean;
   backhaulDetails?: string;
   proofOfDelivery?: {
     signatureName: string;
     photoUrl?: string;
     deliveredAt: string;
-    verifiedGpsLat: number;
-    verifiedGpsLng: number;
+    verifiedGpsLat?: number;
+    verifiedGpsLng?: number;
     notes: string;
   };
   createdAt: string;
@@ -390,15 +391,20 @@ export interface InfrastructureReport {
 
 export interface SatelliteDetection {
   id: string;
-  sourceSatellite: 'Sentinel-2' | 'Landsat-9' | 'Copernicus-DEM' | 'Commercial-SAR';
+  sourceSatellite: 'Sentinel-2' | 'Landsat-9' | 'Copernicus-DEM' | 'Commercial-SAR' | 'VIIRS NOAA-20' | 'Field Report';
   targetArea: string;
   lat: number;
   lng: number;
-  detectionType: 'ILLEGAL_DUMP_CANDIDATE' | 'LANDFILL_VOLUME_EXPANSION' | 'SCRAP_METAL_ACCUMULATION' | 'INDUSTRIAL_STOCKPILE_DEPLETION';
+  detectionType: 'ILLEGAL_DUMP_CANDIDATE' | 'LANDFILL_VOLUME_EXPANSION' | 'SCRAP_METAL_ACCUMULATION' | 'INDUSTRIAL_STOCKPILE_DEPLETION' | 'BROAD_SURFACE_ANOMALY';
   confidenceScore: number; // 0-100%
   status: 'UNVERIFIED_CANDIDATE' | 'GROUND_VERIFIED' | 'FALSE_POSITIVE' | 'ACTIONED';
   imageryDate: string;
   changeAreaSqm: number;
+  detectionSource?: 'LIVE_NASA_AI' | 'FIELD_REPORTED' | 'SEEDED_DEMO';
+  sceneId?: string;
+  reporterName?: string;
+  reporterOrgName?: string;
+  reportedAt?: string;
   groundInspectionId?: string;
   candidateNotes: string;
   bounds: { north: number; south: number; east: number; west: number };
